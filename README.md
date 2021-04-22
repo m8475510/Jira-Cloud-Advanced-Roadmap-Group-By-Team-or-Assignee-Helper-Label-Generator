@@ -46,7 +46,7 @@ Please upvote: https://jira.atlassian.com/browse/JSWCLOUD-21438
 ## Legal Disclaimer & Appreciation
 * prerequisites: you have to obtain licenses of Jira Cloud, Advanced Roadmap and Scriptrunner
 * all legal matters of Jira Cloud, Advanced Roadmaps and Scriptrunner are between you and their corresponding legal entities
-* on top of that, the script itself is provided with no liability whatever - reuse, change freely - it's a humble contribution to the great community and great products of Atlassian and Adaptavist - hence note the LICENSE file in the repo
+* on top of that, the script itself is provided with no liability whatsoever - reuse, change freely - it's a humble contribution to the great community and great products of Atlassian and Adaptavist - hence note the LICENSE file in the repo
 
 ## How to setup
 * Go to your Script Runners Config UI

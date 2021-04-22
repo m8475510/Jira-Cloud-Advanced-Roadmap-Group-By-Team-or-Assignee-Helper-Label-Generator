@@ -18,7 +18,7 @@ Result in these Group By Views:
 ## Mitigation
 As a temporary mitigation if you already are committed to Advanced Roadmaps and have multi team initiatives this repo provides a groovy script based on the great [ScriptRunner for Jira (Cloud)](https://marketplace.atlassian.com/apps/6820/scriptrunner-for-jira?hosting=cloud&tab=overview).
 
-It's basic strategy is to automatically generate labels on all initiative and it's subchildren issues to provide a distinct set of involved assignees and teams of the initiative hierarchy branch
+It's basic strategy is to automatically generate labels on the initiative of interest and all it's subchildren issues to provide a distinct set of involved assignees and teams of the initiative hierarchy branch
 
 The algorithms/solutions concrete strategy is:
 * work event based, not as a sheduled job

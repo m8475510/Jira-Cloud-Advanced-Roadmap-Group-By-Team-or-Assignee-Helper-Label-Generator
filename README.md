@@ -51,6 +51,6 @@ Please upvote: https://jira.atlassian.com/browse/JSWCLOUD-21438
 ## How to setup
 * Go to your Script Runners Config UI
 * copy and paste the scripts body into two ! script listeners
-* first script listener should have subscribed to event ``Issue Updated`` and have condition set to ```"issue.changelogs[0].items[0].field == "assignee" || issue.changelogs[0].items[0].field == "Team"```
+* first script listener should have subscribed to event ``Issue Updated`` and have condition set to ```issue.changelogs[0].items[0].field == "assignee" || issue.changelogs[0].items[0].field == "Team" || issue.changelogs[0].items[0].field == "Parent Link" || issue.changelogs[0].items[0].field == "Epic Link"```
 * second script listener should have subscribed to event ``Issue Created`` with condition `true` (to always fire)
 * set both listeners to react on those jira projects you need them to work. (should be all jira projects involved in the adv.roadmap hierarchy of your interest)

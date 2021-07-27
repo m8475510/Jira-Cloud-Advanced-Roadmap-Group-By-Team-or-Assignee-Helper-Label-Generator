@@ -1,6 +1,7 @@
 //logger.info("/////////////////////////////////////////////////////////////")
 //logger.info("//////// fetching custom ids of custom fields needed for api")
 //logger.info("/////////////////////////////////////////////////////////////")
+logger.info("changelog: ${changelog.toString()}")
 
 // Get the Id for the custom fields "Epic Link", "Parent Link" and Team (that comes with Adv.Roadmaps)
 def customFields = get("/rest/api/2/field").asObject(List).body.findAll { (it as Map).custom } as List<Map>
@@ -17,155 +18,167 @@ def teamFieldId = customFields.find {it.name == 'Team'}?.id
 //logger.info("/////////////////////////////////////////////////////////////")
 
 def issueToCheck = issue
-for(def i = 0; i < 10; i++ )
-{
-    if(issueToCheck.fields["issuetype"].name == null) throw new Exception("IssueType Name null")
-    //else logger.info("${issueToCheck.key}: issutype: " + issueToCheck.fields["issuetype"].name)
+processInitiativeHierarchy(issueToCheck, parentLinkId, epicLinkId, teamFieldId)
 
-    if(issueToCheck.fields["issuetype"].name == "Initiative" || issueToCheck.fields["issuetype"].name == "Stream" ) {
-        //logger.info("issutype initiative or stream found -> stopping traversing")
-        break
+//if eg relocated an issue to another epic or initiative => old hierarchie has to be cleaned up
+def changedField = changelog.items[0]?.field
+def oldHierarchyUpstreamIssue = changelog.items[0]?.fromString
+
+if((changedField == "Parent Link" || changedField == "Epic Link") && oldHierarchyUpstreamIssue) {
+    def newIssue = oldHierarchyUpstreamIssue.toString().replaceAll("]", "").replaceAll("\\[", "")
+    logger.info("cleanup of old hierachy needed: ${newIssue}")
+    issueToCheck = getIssue(newIssue, parentLinkId, epicLinkId)
+    processInitiativeHierarchy(issueToCheck, parentLinkId, epicLinkId, teamFieldId)
+}
+
+def void processInitiativeHierarchy(Map issueToCheck, parentLinkId, epicLinkId, teamFieldId) {
+    for (def i = 0; i < 10; i++) {
+        if (issueToCheck.fields["issuetype"].name == null) throw new Exception("IssueType Name null")
+        //else logger.info("${issueToCheck.key}: issutype: " + issueToCheck.fields["issuetype"].name)
+
+        if (issueToCheck.fields["issuetype"].name == "Initiative" || issueToCheck.fields["issuetype"].name == "Stream") {
+            //logger.info("issutype initiative or stream found -> stopping traversing")
+            break
+        }
+
+        def parentKey = findParentIssueKey(issueToCheck as Map, parentLinkId, epicLinkId)
+        if (parentKey == null) {
+            logger.info("${issueToCheck.key}: parentkey: no parentKey found. hierarchy chain upstream ends here. halting...")
+            return
+        }
+
+        //logger.info("fetching parent issue")
+        issueToCheck = getIssue(parentKey, parentLinkId, epicLinkId)
+
+        if (i == 9) throw new Exception("something must be wrong. traversing too much upwards: iteratin limit: ${i + 1}")
     }
 
-    def parentKey = findParentIssueKey(issueToCheck as Map, parentLinkId, epicLinkId)
-    if (parentKey == null) {
-        logger.info("${issueToCheck.key}: parentkey: no parentKey found. hierarchy chain upstream ends here. halting...")
+    if (issueToCheck.fields["issuetype"].name != "Initiative") {
+        logger.info("${issueToCheck.key}: after traversal issuetype not Initiative. halting...")
         return
     }
 
-    //logger.info("fetching parent issue")
-    issueToCheck = getIssue(parentKey, parentLinkId, epicLinkId)
+    //logger.info("/////////////////////////////////////////////////////////////")
+    //logger.info("//////// Initiative found. starting reprocessing generated labels the whole hierarchy beneath it.")
+    //logger.info("/////////////////////////////////////////////////////////////")
 
-    if(i == 9) throw new Exception("something must be wrong. traversing too much upwards: iteratin limit: ${i+1}")
-}
+    def prefixTeamLabels = "aRT"
+    def prefixAssigneeLabels = "aRA"
 
-if(issueToCheck.fields["issuetype"].name != "Initiative") {
-    logger.info("${issueToCheck.key}: after traversal issuetype not Initiative. halting...")
-    return
-}
+    def initiativeKeyToProcess = issueToCheck.key
 
-//logger.info("/////////////////////////////////////////////////////////////")
-//logger.info("//////// Initiative found. starting reprocessing generated labels the whole hierarchy beneath it.")
-//logger.info("/////////////////////////////////////////////////////////////")
+    // query all hierarchy child issues of initiative and initiative itself
+    def query = "issuekey = \"${initiativeKeyToProcess}\" or issuekey in portfolioChildIssuesOf(\"${initiativeKeyToProcess}\")"
 
-def prefixTeamLabels = "aRT"
-def prefixAssigneeLabels = "aRA"
+    // do the search and request only the fields in result we actually need
+    def searchReq = get("/rest/api/2/search")
+            .queryString("jql", query)
+            .queryString("maxResults", 2147483647)
+    // int32.max
+    // see (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get) > default 50 > could be problem therefore max value explicitly
+    // see https://community.atlassian.com/t5/Jira-questions/how-to-alter-the-number-of-maxResults-on-a-search-jql-REST-API/qaq-p/684442
+    // hence request a maximum and then do pagination based on maxResults as pagins step size
+    // see https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#pagination
+    // "To find the maximum number of items that an operation could return, set maxResults to a large number—for example, over 1000—and if the returned value of maxResults is less than the requested value, the returned value is the maximum."
+            .queryString('fields', "${teamFieldId},assignee,labels")
+            .asObject(Map)
 
-def initiativeKeyToProcess = issueToCheck.key
+    // Verify the search completed successfully
+    assert searchReq.status == 200
+    // Save the search results as a Map
+    Map searchResult = searchReq.body
 
-// query all hierarchy child issues of initiative and initiative itself
-def query = "issuekey = \"${initiativeKeyToProcess}\" or issuekey in portfolioChildIssuesOf(\"${initiativeKeyToProcess}\")"
+    def issuescollection = searchResult.issues.collect()
 
-// do the search and request only the fields in result we actually need
-def searchReq = get("/rest/api/2/search")
-        .queryString("jql", query)
-        .queryString("maxResults", 2147483647)
-        // int32.max
-        // see (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get) > default 50 > could be problem therefore max value explicitly
-        // see https://community.atlassian.com/t5/Jira-questions/how-to-alter-the-number-of-maxResults-on-a-search-jql-REST-API/qaq-p/684442
-        // hence request a maximum and then do pagination based on maxResults as pagins step size
-        // see https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#pagination
-        // "To find the maximum number of items that an operation could return, set maxResults to a large number—for example, over 1000—and if the returned value of maxResults is less than the requested value, the returned value is the maximum."
-        .queryString('fields', "${teamFieldId},assignee,labels")
-        .asObject(Map)
+    if ((searchResult.startAt == 0) && (searchResult.maxResults > 0) && (searchResult.total > searchResult.maxResults)) {
+        //we need pagination and fetch all issues repeatedly
+        logger.info("pagination needed! searchResult.total: ${searchResult.total}")
+        for (def i = 1; i <= (searchResult.total / searchResult.maxResults); i++) {
+            logger.info("startAt: ${searchResult.startAt}, maxResults: ${searchResult.maxResults}, total: ${searchResult.total}")
+            searchReq = get("/rest/api/2/search")
+                    .queryString("jql", query)
+                    .queryString("startAt", searchResult.maxResults * i)
+                    .queryString("maxResults", searchResult.maxResults)
+                    .queryString('fields', "${teamFieldId},assignee,labels")
+                    .asObject(Map)
 
-// Verify the search completed successfully
-assert searchReq.status == 200
-// Save the search results as a Map
-Map searchResult = searchReq.body
+            assert searchReq.status == 200
+            searchResult = searchReq.body
+            logger.info(searchResult.toString())
 
-def issuescollection = searchResult.issues.collect()
-
-if((searchResult.startAt == 0) && (searchResult.maxResults > 0) && (searchResult.total > searchResult.maxResults))
-{
-    //we need pagination and fetch all issues repeatedly
-    logger.info("pagination needed! searchResult.total: ${searchResult.total}")
-    for (def i = 1; i <= (searchResult.total / searchResult.maxResults); i++){
-        logger.info("startAt: ${searchResult.startAt}, maxResults: ${searchResult.maxResults}, total: ${searchResult.total}")
-        searchReq = get("/rest/api/2/search")
-                .queryString("jql", query)
-                .queryString("startAt", searchResult.maxResults * i)
-                .queryString("maxResults", searchResult.maxResults)
-                .queryString('fields', "${teamFieldId},assignee,labels")
-                .asObject(Map)
-
-        assert searchReq.status == 200
-        searchResult = searchReq.body
-        logger.info(searchResult.toString())
-
-        issuescollection.addAll(searchResult.issues.collect())
-    }
-}
-else
-    logger.info("no pagination needed!")
-
-if(issuescollection.size() != searchResult.total) throw new Exception("Paging issuecollection size != initial searchresult total. Something went wrong")
-
-// Log Out ResultSet
-//issuescollection.each { Map issue ->
-    //logger.info("issue found ${issue.key} with team: '${issue.fields[teamFieldId] ? issue.fields[teamFieldId].title : null}', assignee: '${issue.fields["assignee"] ? issue.fields["assignee"].displayName : null}', labels: ${issue.fields["labels"]}")
-//}
-//logger.info("/////////////////////////////////////////////////////////////")
-//logger.info("//////// creating fresh group by teams and assignees, as well as label set")
-//logger.info("/////////////////////////////////////////////////////////////")
-
-// Group by Team
-def resultByTeam = issuescollection
-        .findAll({issue -> issue.fields[teamFieldId] != null})
-        .groupBy({issue -> issue.fields[teamFieldId].title})
-        .keySet() as List
-
-//logger.info("new 'grouped by team': ${resultByTeam}")
-
-// Group by Assignee
-def resultByAssignee = issuescollection
-        .findAll({issue -> issue.fields["assignee"] != null})
-        .groupBy({issue -> issue.fields["assignee"].displayName})
-        .keySet() as List
-
-//logger.info("new 'grouped by assignee': ${resultByAssignee}")
-
-// generate now label set
-List<String> newTeamLabels = resultByTeam.collect {team -> "${prefixTeamLabels}.${team.replaceAll("\\s","-")}"}
-//logger.info("new TeamLabels generated: ${newTeamLabels}")
-
-List<String> newAssigneeLabels = resultByAssignee.collect {team -> "${prefixAssigneeLabels}.${team.replaceAll("\\s","-")}"}
-//logger.info("new AssigneeLabels generated: ${newAssigneeLabels}")
-
-//logger.info("/////////////////////////////////////////////////////////////")
-//logger.info("//////// now add and remove labels to the whole initiative branch")
-//logger.info("/////////////////////////////////////////////////////////////")
-
-//logger.info("Reprocessing now initiative ${initiativeKeyToProcess} and adding, removing or keeping labels for teams and assignees according to new state.")
-
-def labelCommands = []
-
-for (Map issue in issuescollection) {
-
-    labelCommands.clear()
-    generateLabelCommands(labelCommands, issue, prefixTeamLabels, newTeamLabels)
-    generateLabelCommands(labelCommands, issue, prefixAssigneeLabels, newAssigneeLabels)
-
-    //now to the label update rest api call for the issue
-    if(!labelCommands.empty) {
-        def result = put('/rest/api/2/issue/' + issue.key)
-                .header('Content-Type', 'application/json')
-                .body([
-                        update: [
-                                labels: labelCommands
-                        ]
-                ])
-                .asString()
-
-        if (result.status == 204) {
-            //logger.info("${issue.key}: labelCommands: ${labelCommands} ... OK")
-        } else {
-            //logger.info("${issue.key}: labelCommands: ${labelCommands} ... ERROR: ${result.status}: ${result.body}")
+            issuescollection.addAll(searchResult.issues.collect())
         }
-    }
-    else logger.info("${issue.key}: labelCommands: ${labelCommands} ... empty > issue skipped, no change needed")
+    } else
+        logger.info("no pagination needed!")
 
+    if (issuescollection.size() != searchResult.total) throw new Exception("Paging issuecollection size != initial searchresult total. Something went wrong")
+
+    // Log Out ResultSet
+    //issuescollection.each { Map issue ->
+        //logger.info("issue found ${issue.key} with team: '${issue.fields[teamFieldId] ? issue.fields[teamFieldId].title : null}', assignee: '${issue.fields["assignee"] ? issue.fields["assignee"].displayName : null}', labels: ${issue.fields["labels"]}")
+    //}
+    //logger.info("/////////////////////////////////////////////////////////////")
+    //logger.info("//////// creating fresh group by teams and assignees, as well as label set")
+    //logger.info("/////////////////////////////////////////////////////////////")
+
+    // Group by Team
+    def resultByTeam = issuescollection
+            .findAll({ issue -> issue.fields[teamFieldId] != null })
+            .groupBy({ issue -> issue.fields[teamFieldId].title })
+            .keySet() as List
+
+    //logger.info("new 'grouped by team': ${resultByTeam}")
+
+    // Group by Assignee
+    def resultByAssignee = issuescollection
+            .findAll({ issue -> issue.fields["assignee"] != null })
+            .groupBy({ issue -> issue.fields["assignee"].displayName })
+            .keySet() as List
+
+    //logger.info("new 'grouped by assignee': ${resultByAssignee}")
+
+    // generate now label set
+    List<String> newTeamLabels = resultByTeam.collect { team -> "${prefixTeamLabels}.${team.replaceAll("\\s", "-")}" }
+    //logger.info("new TeamLabels generated: ${newTeamLabels}")
+
+    List<String> newAssigneeLabels = resultByAssignee.collect { team -> "${prefixAssigneeLabels}.${team.replaceAll("\\s", "-")}" }
+    //logger.info("new AssigneeLabels generated: ${newAssigneeLabels}")
+
+    //logger.info("/////////////////////////////////////////////////////////////")
+    //logger.info("//////// now add and remove labels to the whole initiative branch")
+    //logger.info("/////////////////////////////////////////////////////////////")
+
+    //logger.info("Reprocessing now initiative ${initiativeKeyToProcess} and adding, removing or keeping labels for teams and assignees according to new state.")
+
+    def labelCommands = []
+
+    for (Map issue in issuescollection) {
+
+        labelCommands.clear()
+        generateLabelCommands(labelCommands, issue, prefixTeamLabels, newTeamLabels)
+        generateLabelCommands(labelCommands, issue, prefixAssigneeLabels, newAssigneeLabels)
+
+        //now to the label update rest api call for the issue
+        if (!labelCommands.empty) {
+            def result = put('/rest/api/2/issue/' + issue.key)
+                    .header('Content-Type', 'application/json')
+                    .body([
+                            update: [
+                                    labels: labelCommands
+                            ]
+                    ])
+                    .asString()
+
+            if (result.status == 204) {
+                //logger.info("${issue.key}: labelCommands: ${labelCommands} ... OK")
+            } else {
+                //logger.info("${issue.key}: labelCommands: ${labelCommands} ... ERROR: ${result.status}: ${result.body}")
+            }
+        } else logger.info("${issue.key}: labelCommands: ${labelCommands} ... empty > issue skipped, no change needed")
+
+    }
 }
+
 
 //// helper methods definitions:
 Map getIssue(String issueKey, parent_link_Id, epic_link_Id) {
@@ -222,3 +235,4 @@ void generateLabelCommands(ArrayList labelCommands, Map issue, String prefixOfLa
 
 
 return "Script Completed - Check the Logs tab for information on which issues were updated."
+

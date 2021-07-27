@@ -17,19 +17,22 @@ def teamFieldId = customFields.find {it.name == 'Team'}?.id
 //logger.info("//////// searching for initiative of issue and traversing upwards hierarchy if needed")
 //logger.info("/////////////////////////////////////////////////////////////")
 
-def issueToCheck = issue
-processInitiativeHierarchy(issueToCheck, parentLinkId, epicLinkId, teamFieldId)
 
 //if eg relocated an issue to another epic or initiative => old hierarchie has to be cleaned up
 def changedField = changelog.items[0]?.field
 def oldHierarchyUpstreamIssue = changelog.items[0]?.fromString
 
 if((changedField == "Parent Link" || changedField == "Epic Link") && oldHierarchyUpstreamIssue) {
-    def newIssue = oldHierarchyUpstreamIssue.toString().replaceAll("]", "").replaceAll("\\[", "")
-    logger.info("cleanup of old hierachy needed: ${newIssue}")
-    issueToCheck = getIssue(newIssue, parentLinkId, epicLinkId)
-    processInitiativeHierarchy(issueToCheck, parentLinkId, epicLinkId, teamFieldId)
+    def oldIssueId = oldHierarchyUpstreamIssue.toString().replaceAll("]", "").replaceAll("\\[", "")
+    logger.info("reprocessing of old hierachy needed: ${oldIssueId}")
+    def oldIssue = getIssue(oldIssueId, parentLinkId, epicLinkId)
+    processInitiativeHierarchy(oldIssue, parentLinkId, epicLinkId, teamFieldId)
 }
+
+//now reprocessn new hierachy tree of the issue
+logger.info("reprocessing now new hierachy: ${issue.key}")
+processInitiativeHierarchy(issue, parentLinkId, epicLinkId, teamFieldId)
+
 
 def void processInitiativeHierarchy(Map issueToCheck, parentLinkId, epicLinkId, teamFieldId) {
     for (def i = 0; i < 10; i++) {
